@@ -1,0 +1,6 @@
+CREATE TABLE login (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    hash VARCHAR(100) NOT NULL
+);

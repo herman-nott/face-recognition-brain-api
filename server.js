@@ -3,37 +3,10 @@ const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 const nodeFetch = require('node-fetch');
+const db = require('./db');
 
 const app = express();
 const PORT = 3000;
-
-let database = {
-    users: [
-        {
-            id: '1',
-            username: 'john',
-            email: 'john@gmail.com',
-            password: 'pass',
-            entries: 0,
-            joined: new Date()
-        },
-        {
-            id: '2',
-            username: 'sam_smith',
-            email: 'ss@gmail.com',
-            password: '1234',
-            entries: 0,
-            joined: new Date()
-        }
-    ],
-    login: [
-        {
-            id: '789',
-            hash: '',
-            email: 'aaa@gmail.com'
-        }
-    ]
-};
 
 const CLARIFAI_MODEL_ID = 'face-detection';
 const USER_ID = 'clarifai';
@@ -47,53 +20,88 @@ app.use(cors());
 
 
 // === GET Requests ===
-app.get('/', (req, res) => {
-    res.send(database.users);
+app.get('/', async (req, res) => {
+    try {
+        const users = await db.select('*').from('users');
+        res.json(users);
+    } catch (err) {
+        res.status(500).json('Server error');
+    }
 });
 
 app.get('/profile/:id', (req, res) => {
     const { id } = req.params;
-    let found = false;
 
-    database.users.forEach(user => {
-        if (user.id === id) {
-            found = true;
-            return res.json(user);
-        }
-    });
-
-    if (!found) {
-        res.status(404).json('not found');
-    }
+    db.select('*').from('users').where({ id: id })
+        .then(user => {
+            if (user.length) {
+                res.json(user[0])
+            } else {
+                res.status(400).json("Not found. Error getting user")
+            }
+        });
 });
 
 // === POST Requests ===
 app.post('/signin', (req, res) => {
-    if ((req.body.emailOrUsername === database.users[0].email || req.body.emailOrUsername === database.users[0].username) && 
-        req.body.password === database.users[0].password) {
-        // res.json("success");
-        res.json(database.users[0]);
-    } else {
-        res.status(400).json("Error logging in.");
-    }
+    db.select('username', 'email', 'hash').from('login')
+        .where(function () {
+            this.where('email', '=', req.body.emailOrUsername)
+                .orWhere('username', '=', req.body.emailOrUsername);
+        })
+        .then(async data => {
+            try {
+                const isValid = await bcrypt.compare(req.body.password, data[0].hash);
+
+                if (isValid) {
+                    return db.select('*').from('users')
+                        .where(function () {
+                            this.where('email', '=', req.body.emailOrUsername)
+                                .orWhere('username', '=', req.body.emailOrUsername);
+                        })
+                        .then(user => {
+                            res.json(user[0]);
+                        })
+                        .catch(err => res.status(400).json('Unable to get a user'));
+                } else {
+                    res.status(400).json('Wrong credentials');
+                }
+            } catch (error) {
+                res.status(500).json('Server error');
+            }
+        })
+        .catch(err => res.status(400).json('Wrong credentials'));
 });
 
-app.post('/register', (req, res) => {
+app.post('/register', async (req, res) => {
     const { email, username, password } = req.body;
 
-    // bcrypt.hash(password, 10, function(err, hash) {
-    //     console.log(hash);
-    // });
+    const hash = await bcrypt.hash(password, 10);
 
-    database.users.push({
-        id: '3',
-        username: username,
-        email: email,
-        entries: 0,
-        joined: new Date()
-    });
-
-    res.json(database.users.at(-1));
+    db.transaction(trx => {
+        trx.insert({
+            hash: hash,
+            email: email,
+            username: username
+        })
+        .into('login')
+        .returning('email')
+        .then(loginEmail => {
+            return trx('users')
+                .returning('*')
+                .insert({
+                    username: username,
+                    email: loginEmail[0].email,
+                    joined: new Date()
+                })
+                .then(user => {
+                    res.json(user[0]);
+                });
+        })
+        .then(trx.commit)
+        .catch(trx.rollback);
+    })
+    .catch(err => res.status(400).json('Unable to register'))
 });
 
 app.post('/clarifai', async (req, res) => {
@@ -128,7 +136,6 @@ app.post('/clarifai', async (req, res) => {
     try {
         const response = await nodeFetch(CLARIFAI_API_URL, requestOptions);
         const data = await response.json();
-        // res.json(data);
         if (response.ok) {
             res.json(data);
         } else {
@@ -145,29 +152,16 @@ app.post('/clarifai', async (req, res) => {
 // === PUT Requests ===
 app.put('/image', (req, res) => {
     const { id } = req.body;
-    let found = false;
 
-    database.users.forEach(user => {
-        if (user.id === id) {
-            found = true;
-            user.entries++;
-            return res.json(user.entries);
-        }
-    });
-
-    if (!found) {
-        res.status(404).json('not found');
-    }
+    db('users').where('id', '=', id)
+        .increment('entries', 1)
+        .returning('entries')
+        .then(entries => {
+            res.json(entries[0].entries);  
+        })
+        .catch(err => res.status(400).json('Unable to get entries'));
 });
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });
-
-/*
-    / --> GET res = this is working
-    /signin --> POST --> success/fail
-    /register --> POST --> user
-    /profile/:userId --> GET = user
-    /image --> PUT --> user
-*/
