@@ -1,8 +1,10 @@
+require('dotenv').config();
+
 const CLARIFAI_MODEL_ID = 'face-detection';
 const USER_ID = 'clarifai';
 const APP_ID = 'main';
 const CLARIFAI_API_URL = `https://api.clarifai.com/v2/models/${CLARIFAI_MODEL_ID}/outputs`;
-const CLARIFAI_API_KEY = '8789603313e74fc3b516d12617ae12fe';
+const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY;
 
 async function handleClarifai(req, res, nodeFetch) {
     const { imageUrl } = req.body;
